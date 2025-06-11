@@ -1,5 +1,6 @@
 import os
-from typing import Any, Tuple
+from typing import Any, Tuple, Generator
+import uuid
 from fastapi import FastAPI, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware   
 from sqlalchemy import text
@@ -9,7 +10,7 @@ import logging
 from fastapi import Query
 from supabase import Client, create_client
 from services.config import settings
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from postgrest import APIError
 from openai import OpenAI
 from langchain_openai import OpenAIEmbeddings
@@ -179,7 +180,7 @@ def answer_question(
     summary="Get chat history for a conversation",
     description="Returns an array of { question, answer } for the given conversation_id"
 )
-async def read_history(conversation_id: str):
+def read_history(conversation_id: str):
     try:
         logger.info(f"Fetching history")
         result = supabase\
@@ -198,6 +199,121 @@ async def read_history(conversation_id: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+@router_v1.post(
+    "/query-stream",
+    response_model=None,
+    tags=["RAG"],
+    summary="Streamed Q&A with history"
+)
+def query_stream(req: QueryRequest):
+    # 0) ensure we have a UUID to track this conversation
+    if req.conversation_id:
+        try:
+            uuid.UUID(req.conversation_id)
+            conversation_id = req.conversation_id
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid conversation_id format (must be UUID)")
+    else:
+        conversation_id = str(uuid.uuid4())
+
+    # 1) load history
+    history = get_history(conversation_id)
+
+    # 2) stream tokens, then append history at the end
+    def event_generator():
+        for token in stream_answer_sync(req.question, conversation_id, history):
+            yield token
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/plain; charset=utf-8",
+        headers={"x-conversation-id": conversation_id}
+    )
+
+def get_history(conversation_id: str) -> List[Dict[str, str]]:
+    """Fetch prior turns for this conversation from Supabase."""
+    resp = (
+        supabase
+        .table("chat_history")
+        .select("question, answer")
+        .eq("conversation_id", conversation_id)
+        .order("id", desc=False)
+        .execute()
+    )
+    if hasattr(resp, "error") and resp.error:
+        raise HTTPException(status_code=500, detail=resp.error.message)
+    return [
+        {"question": r["question"], "answer": r["answer"]}
+        for r in resp.data
+    ]
+
+def stream_answer_sync(
+    question: str,
+    conversation_id: str,
+    history: List[Dict[str,str]],
+    match_threshold: float = 0.75,
+    match_count: int = 5,
+) -> Generator[str, None, None]:
+    """Yield OpenAI tokens one-by-one, using Supabase RPC for semantic search."""
+    # 1) embed & fetch top docs via our pg function
+    q_vec = embedding_model.embed_query(question)
+    try:
+        rpc_payload = {
+            "query_embedding": q_vec,
+            "match_threshold": match_threshold,
+            "match_count": match_count,
+        }
+        docs_resp = supabase.rpc("match_documents", rpc_payload).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB function error: {e}")
+
+    docs = docs_resp.data or []
+    # build context
+    context = "\n\n---\n\n".join(d["content"] for d in docs)
+
+    # build history block
+    if history:
+        hist_block = "\n".join(
+            f"User: {turn['question']}\nAssistant: {turn['answer']}"
+            for turn in history
+        )
+    else:
+        hist_block = "(no prior context)\n"
+
+    prompt = (
+        "You are a helpful assistant.\n\n"
+        f"Conversation so far:\n{hist_block}\n\n"
+        f"Context from documents:\n{context}\n\n"
+        f"Question: {question}\n"
+        "Answer:"
+    )
+
+    # 2) stream from OpenAI
+    client = OpenAI(api_key=settings.openai_api_key)
+    stream = client.chat.completions.create(
+        model=settings.openai_model,
+        messages=[{"role": "user", "content": prompt}],
+        stream=True,
+    )
+
+    full_answer = ""
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            full_answer += delta
+            yield delta
+
+    # after streaming is done, append to history
+    try:
+        supabase.table("chat_history").insert({
+            "conversation_id": conversation_id,
+            "question": question,
+            "answer": full_answer
+        }).execute()
+    except Exception as e:
+        # we can’t stream more at this point, so just log or ignore
+        logger.error(f"Failed to append chat history: {e}")
 
 app.include_router(router_v1)
 
