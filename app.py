@@ -110,7 +110,7 @@ def get_all_documents(skip: int = Query(0, ge=0), limit: int = Query(10, ge=1, l
     description="Retrieval-Augmented Generation over ingested documents."
 )
 def query_qa(req: QueryRequest) -> QueryResponse:
-    answer, sources = answer_question(req.question)
+    answer, sources = answer_question(req.question, match_threshold=0.75, match_count=5)
     return QueryResponse(answer=answer, source_docs=sources)
 
 openai.api_key = settings.openai_api_key
@@ -122,45 +122,46 @@ embedding_model = OpenAIEmbeddings(
 def to_pgvector_literal(vec: list[float]) -> str:
     return f"[{','.join(f'{x:.6f}' for x in vec)}]"
 
-def answer_question(question: str) -> Tuple[str, List[Dict[str, any]]]:
+def answer_question(
+    question: str,
+    match_threshold: float = 0.8,
+    match_count: int    = 5,
+) -> Tuple[str, List[Dict[str, any]]]:
     # 1) Embed the question
     q_vector = embedding_model.embed_query(question)
-    # to_pgvector_literal should turn [0.1, 0.2, …] into a Postgres‐literal like
-    # "'[0.1,0.2,…]'" so you can inline it into your select.
-    q_vector_literal = to_pgvector_literal(q_vector)
+    
+    # 2) Call the RPC
+    try:
+        rpc_payload = {
+            "query_embedding": q_vector,
+            "match_threshold": match_threshold,
+            "match_count": match_count,
+        }
+        resp = supabase.rpc("match_documents", rpc_payload).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB function error: {e}")
 
-    # 2) Fetch top‐5 by cosine similarity using the pgvector operator <=>
-    select_str = (
-         f"id, content, metadata, "
-         f"similarity:1-(embedding<=>{q_vector_literal})"
-    )
+    rows = resp.data
 
-    resp = (
-        supabase
-        .table("documents")
-        .select(select_str)
-        .order("similarity", desc=True)   # order by the aliased field
-        .limit(5)
-        .execute()
-    )
+    if not rows:
+        return "I couldn't find any relevant documents.", []
 
-    rows = resp.data  # List[dict]
-
-    # 3) Build context & sources list
-    context_blocks = [r["content"] for r in rows]
+    # 3) Build context and source list
+    context = "\n\n---\n\n".join(r["content"] for r in rows)
     source_docs = [
-        {"id": str(r["id"]), "similarity": float(r["similarity"]), "metadata": r["metadata"]}
+        {
+            "id":       str(r["id"]),
+            "similarity": float(r["similarity"]),
+            "metadata": r["metadata"],
+        }
         for r in rows
     ]
 
-    context = "\n\n---\n\n".join(context_blocks)
     prompt = (
         "Use the following context to answer the question:\n\n"
         f"{context}\n\n"
-        f"Question: {question}\n"
-        "Answer:"
+        f"Question: {question}\nAnswer:"
     )
-
     # 4) Call OpenAI synchronously
     client = OpenAI(api_key=settings.openai_api_key)
     completion = client.chat.completions.create(
@@ -170,7 +171,6 @@ def answer_question(question: str) -> Tuple[str, List[Dict[str, any]]]:
     answer = completion.choices[0].message.content.strip()
 
     return answer, source_docs
-
 
 @router_v1.get(
     "/history/{conversation_id}",
