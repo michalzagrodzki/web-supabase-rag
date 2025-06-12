@@ -1,13 +1,10 @@
-from supabase import create_client
 from langchain_community.vectorstores import SupabaseVectorStore
 from langchain_openai import OpenAIEmbeddings
 from config.config import settings
+from db.supabase_client import create_supabase_client
 
 # 1) Build a Supabase client from your URL and Key
-supabase_client = create_client(
-    settings.supabase_url,   # e.g. "https://abcd1234.supabase.co"
-    settings.supabase_key    # service_role or anon key
-)
+supabase = create_supabase_client()
 
 # 2) Initialize OpenAI embeddings
 embeddings = OpenAIEmbeddings(
@@ -17,7 +14,7 @@ embeddings = OpenAIEmbeddings(
 
 # 3) Now pass the client into SupabaseVectorStore
 vector_store = SupabaseVectorStore(
-    client=supabase_client,
+    client=supabase,
     embedding=embeddings,
     table_name=settings.supabase_table,  # e.g. "documents"
 )

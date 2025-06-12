@@ -3,13 +3,11 @@ from typing import Any, Tuple, Generator
 import uuid
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, APIRouter, File, UploadFile
-from fastapi.middleware.cors import CORSMiddleware   
-from sqlalchemy import text
+from fastapi.middleware.cors import CORSMiddleware
 from services.schemas import QueryRequest, QueryResponse, ChatHistoryItem, UploadResponse
 from typing import Any, List, Dict
 import logging
 from fastapi import Query
-from supabase import Client, create_client
 from config.config import settings
 from fastapi.responses import JSONResponse, StreamingResponse
 from postgrest import APIError
@@ -19,6 +17,7 @@ import openai
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from services.vector_store import vector_store
+from db.supabase_client import create_supabase_client
 
 logging.basicConfig(
     level=logging.DEBUG,  # or DEBUG
@@ -54,10 +53,6 @@ app.add_middleware(
         "X-HTTP-Method-Override",
     ],
 )
-
-def create_supabase_client():
-    supabase: Client = create_client(settings.supabase_url, settings.supabase_key)
-    return supabase
 
 supabase = create_supabase_client()
 
