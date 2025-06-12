@@ -21,3 +21,26 @@ class Settings(BaseSettings):
         env_file = ".env"
 
 settings = Settings()
+
+tags_metadata = [
+    {
+        "name": "Health",
+        "description": "Health-check and diagnostics endpoints.",
+    },
+    {
+        "name": "Documents",
+        "description": "List and retrieve stored documents.",
+    },
+    {
+        "name": "RAG",
+        "description": "Retrieval-Augmented Generation (Q&A) endpoints.",
+    },
+    {
+        "name": "History",
+        "description": "Chat history operations.",
+    },
+    {
+        "name": "Ingestion",
+        "description": "PDF ingestion and embedding endpoints.",
+    },
+]

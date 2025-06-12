@@ -12,7 +12,7 @@ from services.schemas import QueryRequest, QueryResponse, ChatHistoryItem, Uploa
 from typing import Any, List, Dict
 import logging
 from fastapi import Query
-from config.config import settings
+from config.config import settings, tags_metadata
 from fastapi.responses import StreamingResponse
 from services.streaming import stream_answer_sync
 from config.cors import configure_cors
@@ -26,13 +26,15 @@ app = FastAPI(
     title="RAG FastAPI Supabase API",
     version="1.0.0",
     description="RAG service using Supabase vector store and OpenAI API",
+    openapi_tags=tags_metadata,
 )
 
 configure_cors(app)
 
 router_v1 = APIRouter(prefix="/v1")
 
-@router_v1.get("/test-db")
+@router_v1.get("/test-db",
+               tags=["Health"])
 def test_db():
     data = check_database_connection()
     return {"status": "ok", "result": data}
@@ -41,6 +43,7 @@ def test_db():
     summary="List documents with pagination",
     description="Fetches paginated rows from the Supabase 'documents' table.",
     response_model=List[Dict[str, Any]],
+    tags=["Documents"],
 )
 def get_all_documents(skip: int = Query(0, ge=0), limit: int = Query(10, ge=1, le=100)) -> Any:
     return list_documents(skip=skip, limit=limit)
@@ -48,7 +51,8 @@ def get_all_documents(skip: int = Query(0, ge=0), limit: int = Query(10, ge=1, l
 @router_v1.post("/query",
     response_model=QueryResponse,
     summary="Query the knowledge base",
-    description="Retrieval-Augmented Generation over ingested documents."
+    description="Retrieval-Augmented Generation over ingested documents.",
+    tags=["RAG"],
 )
 def query_qa(req: QueryRequest) -> QueryResponse:
     answer, sources = answer_question(req.question, match_threshold=0.75, match_count=5)
@@ -56,17 +60,17 @@ def query_qa(req: QueryRequest) -> QueryResponse:
 
 @router_v1.get("/history/{conversation_id}",
     response_model=List[ChatHistoryItem],
-    tags=["History"],
     summary="Get chat history for a conversation",
-    description="Returns an array of { question, answer } for the given conversation_id"
+    description="Returns an array of { question, answer } for the given conversation_id",
+    tags=["History"],
 )
 def read_history(conversation_id: str):
     return get_chat_history(conversation_id)
 
 @router_v1.post("/query-stream",
     response_model=None,
+    summary="Streamed Q&A with history",
     tags=["RAG"],
-    summary="Streamed Q&A with history"
 )
 def query_stream(req: QueryRequest):
     # 0) ensure we have a UUID to track this conversation
@@ -96,7 +100,8 @@ def query_stream(req: QueryRequest):
 @router_v1.post("/upload",
     response_model=UploadResponse,
     summary="Upload a PDF document",
-    description="Ingests a PDF, splits into chunks, and stores embeddings in Supabase"
+    description="Ingests a PDF, splits into chunks, and stores embeddings in Supabase",
+    tags=["Ingestion"],
 )
 def upload_pdf(file: UploadFile = File(...)):
     # validate file type
