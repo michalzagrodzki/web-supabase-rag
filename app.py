@@ -1,10 +1,11 @@
 import os
 from typing import Any, Tuple, Generator
 import uuid
-from fastapi import FastAPI, HTTPException, APIRouter
+from datetime import datetime, timezone
+from fastapi import FastAPI, HTTPException, APIRouter, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware   
 from sqlalchemy import text
-from services.schemas import QueryRequest, QueryResponse, ChatHistoryItem
+from services.schemas import QueryRequest, QueryResponse, ChatHistoryItem, UploadResponse
 from typing import Any, List, Dict
 import logging
 from fastapi import Query
@@ -15,6 +16,9 @@ from postgrest import APIError
 from openai import OpenAI
 from langchain_openai import OpenAIEmbeddings
 import openai
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from services.vector_store import vector_store
 
 logging.basicConfig(
     level=logging.DEBUG,  # or DEBUG
@@ -83,8 +87,7 @@ def test_db():
             content={"status": "error", "detail": str(e)}
         )
 
-@router_v1.get(
-    "/documents",
+@router_v1.get("/documents",
     summary="List documents with pagination",
     description="Fetches paginated rows from the Supabase 'documents' table.",
     response_model=List[Dict[str, Any]],
@@ -104,8 +107,7 @@ def get_all_documents(skip: int = Query(0, ge=0), limit: int = Query(10, ge=1, l
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
-@router_v1.post(
-    "/query",
+@router_v1.post("/query",
     response_model=QueryResponse,
     summary="Query the knowledge base",
     description="Retrieval-Augmented Generation over ingested documents."
@@ -114,6 +116,89 @@ def query_qa(req: QueryRequest) -> QueryResponse:
     answer, sources = answer_question(req.question, match_threshold=0.75, match_count=5)
     return QueryResponse(answer=answer, source_docs=sources)
 
+@router_v1.get("/history/{conversation_id}",
+    response_model=List[ChatHistoryItem],
+    tags=["History"],
+    summary="Get chat history for a conversation",
+    description="Returns an array of { question, answer } for the given conversation_id"
+)
+def read_history(conversation_id: str):
+    try:
+        logger.info(f"Fetching history")
+        result = supabase\
+            .table("chat_history")\
+            .select("id, conversation_id, question, answer")\
+            .eq("conversation_id", conversation_id)\
+            .execute()
+
+        data = []
+        for row in result.data:
+            row["id"] = str(row["id"])
+            data.append(row)
+
+        logger.info(f"Received {len(result.data)} chat histories")
+        return data
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+@router_v1.post("/query-stream",
+    response_model=None,
+    tags=["RAG"],
+    summary="Streamed Q&A with history"
+)
+def query_stream(req: QueryRequest):
+    # 0) ensure we have a UUID to track this conversation
+    if req.conversation_id:
+        try:
+            uuid.UUID(req.conversation_id)
+            conversation_id = req.conversation_id
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid conversation_id format (must be UUID)")
+    else:
+        conversation_id = str(uuid.uuid4())
+
+    # 1) load history
+    history = get_history(conversation_id)
+
+    # 2) stream tokens, then append history at the end
+    def event_generator():
+        for token in stream_answer_sync(req.question, conversation_id, history):
+            yield token
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/plain; charset=utf-8",
+        headers={"x-conversation-id": conversation_id}
+    )
+
+@router_v1.post("/upload",
+    response_model=UploadResponse,
+    summary="Upload a PDF document",
+    description="Ingests a PDF, splits into chunks, and stores embeddings in Supabase"
+)
+def upload_pdf(file: UploadFile = File(...)):
+    # validate file type
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    # read & save locally
+    contents = file.file.read()   # sync read
+    os.makedirs(settings.pdf_dir, exist_ok=True)
+    path = os.path.join(settings.pdf_dir, file.filename)
+    with open(path, "wb") as f:
+        f.write(contents)
+
+    # ingest
+    count = ingest_pdf_sync(path)
+    logger.info(f"Finished ingestion, inserted {count} chunks.")
+
+    return UploadResponse(
+        message="PDF ingested successfully",
+        inserted_count=count
+    )
+
+#/*------- service methods -------*/
 openai.api_key = settings.openai_api_key
 embedding_model = OpenAIEmbeddings(
     model=settings.embedding_model,
@@ -172,64 +257,6 @@ def answer_question(
     answer = completion.choices[0].message.content.strip()
 
     return answer, source_docs
-
-@router_v1.get(
-    "/history/{conversation_id}",
-    response_model=List[ChatHistoryItem],
-    tags=["History"],
-    summary="Get chat history for a conversation",
-    description="Returns an array of { question, answer } for the given conversation_id"
-)
-def read_history(conversation_id: str):
-    try:
-        logger.info(f"Fetching history")
-        result = supabase\
-            .table("chat_history")\
-            .select("id, conversation_id, question, answer")\
-            .eq("conversation_id", conversation_id)\
-            .execute()
-
-        data = []
-        for row in result.data:
-            row["id"] = str(row["id"])
-            data.append(row)
-
-        logger.info(f"Received {len(result.data)} chat histories")
-        return data
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
-
-@router_v1.post(
-    "/query-stream",
-    response_model=None,
-    tags=["RAG"],
-    summary="Streamed Q&A with history"
-)
-def query_stream(req: QueryRequest):
-    # 0) ensure we have a UUID to track this conversation
-    if req.conversation_id:
-        try:
-            uuid.UUID(req.conversation_id)
-            conversation_id = req.conversation_id
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid conversation_id format (must be UUID)")
-    else:
-        conversation_id = str(uuid.uuid4())
-
-    # 1) load history
-    history = get_history(conversation_id)
-
-    # 2) stream tokens, then append history at the end
-    def event_generator():
-        for token in stream_answer_sync(req.question, conversation_id, history):
-            yield token
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/plain; charset=utf-8",
-        headers={"x-conversation-id": conversation_id}
-    )
 
 def get_history(conversation_id: str) -> List[Dict[str, str]]:
     """Fetch prior turns for this conversation from Supabase."""
@@ -314,6 +341,36 @@ def stream_answer_sync(
     except Exception as e:
         # we can’t stream more at this point, so just log or ignore
         logger.error(f"Failed to append chat history: {e}")
+
+def ingest_pdf_sync(file_path: str) -> int:
+    # 1) load & chunk
+    loader = PyPDFLoader(file_path)
+    pages = loader.load()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = splitter.split_documents(pages)
+    logger.info(f"Split into {len(chunks)} chunks.")
+
+    # 2) push embeddings to Supabase vector store
+    vector_store.add_documents(chunks)
+    logger.info("Added embeddings to Supabase vector store.")
+
+    # 3) record ingestion metadata in Postgres via Supabase
+    filename = os.path.basename(file_path)
+    metadata = {"chunks": len(chunks), "path": file_path, "ingested_at": datetime.now(timezone.utc).isoformat()}
+    resp = supabase\
+        .table("pdf_ingestion")\
+        .insert({
+            "filename": filename,
+            "metadata": metadata
+        })\
+        .execute()
+
+    if hasattr(resp, "error") and resp.error:
+        # if the insert failed, surface an HTTP error
+        raise HTTPException(status_code=500, detail=f"Failed to record ingestion: {resp.error.message}")
+
+    logger.info("Inserted ingestion record into Supabase.")
+    return len(chunks)
 
 app.include_router(router_v1)
 
