@@ -1,7 +1,7 @@
 from supabase import create_client
 from langchain_community.vectorstores import SupabaseVectorStore
 from langchain_openai import OpenAIEmbeddings
-from services.config import settings
+from config.config import settings
 
 # 1) Build a Supabase client from your URL and Key
 supabase_client = create_client(

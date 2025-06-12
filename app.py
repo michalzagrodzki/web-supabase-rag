@@ -10,7 +10,7 @@ from typing import Any, List, Dict
 import logging
 from fastapi import Query
 from supabase import Client, create_client
-from services.config import settings
+from config.config import settings
 from fastapi.responses import JSONResponse, StreamingResponse
 from postgrest import APIError
 from openai import OpenAI
