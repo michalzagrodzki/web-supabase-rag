@@ -1,7 +1,7 @@
 import os
 from typing import Any
+import uuid
 from fastapi import FastAPI, HTTPException, APIRouter, File, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
 from services.chat_history import get_chat_history
 from services.db_check import check_database_connection
 from services.document import list_documents
@@ -15,6 +15,7 @@ from fastapi import Query
 from config.config import settings
 from fastapi.responses import StreamingResponse
 from services.streaming import stream_answer_sync
+from config.cors import configure_cors
 
 logging.basicConfig(
     level=logging.DEBUG,  # or DEBUG
@@ -27,27 +28,7 @@ app = FastAPI(
     description="RAG service using Supabase vector store and OpenAI API",
 )
 
-origins = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:5173",
-    "http://localhost:5174",
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=[
-        "Origin",
-        "X-Requested-With",
-        "Content-Type",
-        "Accept",
-        "Authorization",
-        "X-HTTP-Method-Override",
-    ],
-)
+configure_cors(app)
 
 router_v1 = APIRouter(prefix="/v1")
 
