@@ -2,6 +2,7 @@ import logging
 from typing import List, Dict, Any
 from fastapi import HTTPException
 from db.supabase_client import create_supabase_client
+from config.config import settings
 
 logger = logging.getLogger(__name__)
 supabase = create_supabase_client()
@@ -15,7 +16,7 @@ def list_documents(skip: int = 0, limit: int = 10) -> List[Dict[str, Any]]:
         logger.info(f"Fetching documents: skip={skip}, limit={limit}")
         resp = (
             supabase
-            .table("documents")
+            .table(settings.supabase_table_documents)
             .select("id, content, embedding, metadata")
             .limit(limit)
             .offset(skip)

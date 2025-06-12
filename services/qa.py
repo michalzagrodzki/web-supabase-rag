@@ -5,6 +5,7 @@ from openai import OpenAI
 from langchain_openai import OpenAIEmbeddings
 from config.config import settings
 from db.supabase_client import create_supabase_client
+from config.config import settings
 
 logger = logging.getLogger(__name__)
 supabase = create_supabase_client()

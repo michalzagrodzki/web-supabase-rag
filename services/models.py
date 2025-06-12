@@ -5,6 +5,7 @@ from sqlmodel import SQLModel, Field
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 from sqlalchemy import JSON, Column
 from pgvector.sqlalchemy import Vector
+from config.config import settings
 
 class PdfIngestion(SQLModel, table=True):
     """
@@ -12,7 +13,7 @@ class PdfIngestion(SQLModel, table=True):
     """
     # 1) Let SQLModel create the PK column.
     #    The default_factory ensures we get a uuid4() string at runtime.
-    __tablename__ = "pdf_ingestion"
+    __tablename__ = settings.supabase_table_pdf_ingestion
     id: PyUUID = Field(
         default_factory=uuid4, 
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True, nullable=False)
@@ -34,7 +35,7 @@ class Document(SQLModel, table=True):
     This SQLModel maps to the `public.documents` table that holds the chunked text
     and embeddings. Adjust column types/names as needed to match your actual table.
     """
-    __tablename__ = "documents"  # ← must match your actual table name
+    __tablename__ = settings.supabase_table_documents  # ← must match your actual table name
 
     id: PyUUID = Field(
         default_factory=uuid4,

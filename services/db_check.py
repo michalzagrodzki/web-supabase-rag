@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from postgrest import APIError
 from db.supabase_client import create_supabase_client
+from config.config import settings
 
 supabase = create_supabase_client()
 
@@ -12,7 +13,7 @@ def check_database_connection():
     try:
         resp = (
             supabase
-            .table("documents")
+            .table(settings.supabase_table_documents)
             .select("id")
             .limit(1)
             .execute()

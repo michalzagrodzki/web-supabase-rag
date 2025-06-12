@@ -6,6 +6,7 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from services.vector_store import vector_store
 from db.supabase_client import create_supabase_client
+from config.config import settings
 
 logger = logging.getLogger(__name__)
 supabase = create_supabase_client()
@@ -27,7 +28,7 @@ def ingest_pdf_sync(file_path: str) -> int:
         "ingested_at": datetime.now(timezone.utc).isoformat()
     }
 
-    resp = supabase.table("pdf_ingestion").insert({
+    resp = supabase.table(settings.supabase_table_pdf_ingestion).insert({
         "filename": filename,
         "metadata": metadata
     }).execute()

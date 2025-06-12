@@ -2,7 +2,6 @@ import logging
 from typing import List, Dict, Generator
 from fastapi import HTTPException
 from openai import OpenAI
-from langchain_openai import OpenAIEmbeddings
 from config.config import settings
 from db.supabase_client import create_supabase_client
 from services.qa import embedding_model
@@ -67,7 +66,7 @@ def stream_answer_sync(
 
     # append history
     try:
-        supabase.table("chat_history").insert({
+        supabase.table(settings.supabase_table_chat_history).insert({
             "conversation_id": conversation_id,
             "question": question,
             "answer": full_answer

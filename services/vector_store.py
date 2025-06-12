@@ -13,5 +13,5 @@ embeddings = OpenAIEmbeddings(
 vector_store = SupabaseVectorStore(
     client=supabase,
     embedding=embeddings,
-    table_name=settings.supabase_table,
+    table_name=settings.supabase_table_documents,
 )

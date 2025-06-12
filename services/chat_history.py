@@ -2,6 +2,7 @@ import logging
 from typing import List, Dict
 from fastapi import HTTPException
 from db.supabase_client import create_supabase_client
+from config.config import settings
 
 logger = logging.getLogger(__name__)
 supabase = create_supabase_client()
@@ -16,7 +17,7 @@ def get_chat_history(conversation_id: str) -> List[Dict[str, str]]:
         logger.info(f"Fetching history for conversation {conversation_id}")
         resp = (
             supabase
-            .table("chat_history")
+            .table(settings.supabase_table_chat_history)
             .select("id, conversation_id, question, answer")
             .eq("conversation_id", conversation_id)
             .execute()
